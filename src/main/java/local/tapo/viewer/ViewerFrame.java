@@ -153,7 +153,7 @@ public final class ViewerFrame extends JFrame {
 
     private LiveCameraPanel addLivePanel(CameraConfig camera) {
         LiveCameraPanel panel = new LiveCameraPanel(camera, config.vlcOptions(),
-            this::openLargeCamera, this::renameCamera);
+            this::openLargeCamera, this::renameCamera, this::deleteCamera);
         panel.setMuted(allMuted);
         livePanels.add(panel);
         liveGrid.add(panel);
@@ -194,6 +194,52 @@ public final class ViewerFrame extends JFrame {
         largeFrames.forEach(frame -> frame.setMuted(muted));
         updateMuteAllButton();
         setStatus(muted ? "All muted" : "Audio enabled");
+    }
+
+    private void deleteCamera(LiveCameraPanel panel) {
+        if (shuttingDown || !livePanels.contains(panel)) {
+            return;
+        }
+        if (recordingStartPending || recordingStopPending || recorderManager.isAnyRunning()) {
+            setStatus("Stop recording before deleting a camera");
+            return;
+        }
+        CameraConfig camera = panel.camera();
+        int choice = JOptionPane.showConfirmDialog(this,
+            "Delete camera \"" + camera.displayName() + "\"?\nRecorded clips will be kept."
+                + "\nYou can still open them with Playback > Open File.",
+            "Delete Camera", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (choice != JOptionPane.YES_OPTION || shuttingDown) {
+            return;
+        }
+        try {
+            ConfigLoader.removeCamera(config.configPath(), camera);
+        } catch (IOException | IllegalArgumentException e) {
+            JOptionPane.showMessageDialog(this,
+                "Could not delete the camera. Check file permissions or reopen the app if the camera list changed.",
+                "Delete Camera", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        recorderManager.removeCamera(camera);
+        config.cameras().remove(camera);
+        livePanels.remove(panel);
+        livePanelsPausedForRecording.remove(panel);
+        liveGrid.remove(panel);
+        new ArrayList<>(largeFrames).stream()
+            .filter(frame -> frame.camera() == camera)
+            .forEach(LargeCameraFrame::dispose);
+        panel.release();
+        liveGrid.revalidate();
+        liveGrid.repaint();
+        playbackPanel.refreshClips();
+        setStatus("Camera deleted; recorded clips kept");
+    }
+
+    private void updateCameraManagementButtons() {
+        boolean enabled = !shuttingDown && !recordingStartPending && !recordingStopPending
+            && !recorderManager.isAnyRunning();
+        addCameraButton.setEnabled(enabled);
+        livePanels.forEach(panel -> panel.setCameraRemovalEnabled(enabled));
     }
 
     private void updateMuteAllButton() {
@@ -306,8 +352,12 @@ public final class ViewerFrame extends JFrame {
             @Override
             public void windowClosed(WindowEvent e) {
                 largeFrames.remove(frame);
-                if (resumeSourcePanel && !shuttingDown && sourcePanel.isDisplayable()) {
-                    playAfterDelay(sourcePanel::play);
+                if (resumeSourcePanel && !shuttingDown && livePanels.contains(sourcePanel)) {
+                    playAfterDelay(() -> {
+                        if (!shuttingDown && livePanels.contains(sourcePanel) && sourcePanel.isDisplayable()) {
+                            sourcePanel.play();
+                        }
+                    });
                 }
             }
         });
@@ -351,7 +401,7 @@ public final class ViewerFrame extends JFrame {
         new ArrayList<>(largeFrames).forEach(LargeCameraFrame::stop);
 
         recordingStartPending = true;
-        addCameraButton.setEnabled(false);
+        updateCameraManagementButtons();
         setStatus("Starting recording...");
         runAfterDelay(2000, this::startRecordingWorker);
     }
@@ -378,7 +428,7 @@ public final class ViewerFrame extends JFrame {
                     resumeLivePanelsPausedForRecording();
                     showError("Could not start recording", exceptionFrom(e));
                 } finally {
-                    addCameraButton.setEnabled(!shuttingDown && !recorderManager.isAnyRunning());
+                    updateCameraManagementButtons();
                 }
             }
         }.execute();
@@ -390,7 +440,7 @@ public final class ViewerFrame extends JFrame {
             return;
         }
         recordingStopPending = true;
-        addCameraButton.setEnabled(false);
+        updateCameraManagementButtons();
         setStatus("Stopping recording...");
         new SwingWorker<Void, Void>() {
             @Override
@@ -402,7 +452,7 @@ public final class ViewerFrame extends JFrame {
             @Override
             protected void done() {
                 recordingStopPending = false;
-                addCameraButton.setEnabled(!shuttingDown && !recorderManager.isAnyRunning());
+                updateCameraManagementButtons();
                 playbackPanel.refreshClips();
                 setStatus("Recording stopped");
                 resumeLivePanelsPausedForRecording();

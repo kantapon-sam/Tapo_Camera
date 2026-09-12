@@ -100,6 +100,9 @@ public final class LargeCameraFrame extends JFrame {
     }
 
     public void play() {
+        if (released) {
+            return;
+        }
         setStatus("Connecting...");
         playerComponent.mediaPlayer().media().play(camera.liveUrl(), vlcOptions);
         applyMuted();
@@ -120,6 +123,10 @@ public final class LargeCameraFrame extends JFrame {
 
     public boolean isMuted() {
         return muted;
+    }
+
+    public CameraConfig camera() {
+        return camera;
     }
 
     public void setMuted(boolean muted) {

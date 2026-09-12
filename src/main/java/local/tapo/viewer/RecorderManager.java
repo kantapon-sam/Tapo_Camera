@@ -19,6 +19,16 @@ public final class RecorderManager {
         recorders.putIfAbsent(camera.id(), new FfmpegRecorder(camera, config));
     }
 
+    public void removeCamera(CameraConfig camera) {
+        FfmpegRecorder recorder = recorders.get(camera.id());
+        if (recorder != null) {
+            if (recorder.isRunning()) {
+                throw new IllegalStateException("Stop recording before deleting a camera.");
+            }
+            recorders.remove(camera.id());
+        }
+    }
+
     public void startAll() throws IOException {
         StringBuilder failures = new StringBuilder();
         for (FfmpegRecorder recorder : recorders.values()) {

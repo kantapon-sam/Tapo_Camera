@@ -10,6 +10,16 @@ Adding cameras:
 - The camera appears immediately and is saved in the active config/cameras.properties.
 - Stop recording before adding a camera. Record All includes newly added cameras.
 
+Viewing camera accounts:
+- Click User / Pass below a camera, then select Show password to reveal the password.
+- Add Camera also shows the selected existing account and includes Show password.
+
+Removing cameras:
+- Click Delete below a camera and confirm. Stop recording first.
+- The camera is removed from its source configuration or RTSP URL file and stays removed after restart.
+- Recorded clips are kept. Use Playback > Open File to open clips from a removed camera.
+- Use + Add Camera to add a removed camera again.
+
 Folders:
 - app\ contains the application jar and Java dependencies.
 - config\ contains cameras.properties and rtsp-urls.txt.

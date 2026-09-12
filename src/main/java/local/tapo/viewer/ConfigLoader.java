@@ -13,6 +13,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Properties;
@@ -70,12 +72,20 @@ public final class ConfigLoader {
         String original = new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
         Properties props = new Properties();
         props.load(new StringReader(original));
-        List<CameraConfig> existing = loadCameras(props, loadCameraNames(cameraNamesPath(path)));
+        Properties savedNames = loadCameraNames(cameraNamesPath(path));
+        List<CameraConfig> existing = loadCameras(props, savedNames);
         Set<String> usedIds = new HashSet<>();
         for (CameraConfig camera : existing) {
             usedIds.add(camera.id());
             if (sameEndpoint(endpoint, camera.liveUrl())) {
                 throw new IllegalArgumentException("This camera and stream are already in the list.");
+            }
+        }
+
+        // A re-added camera must not inherit a deleted camera's saved display name.
+        for (String key : savedNames.stringPropertyNames()) {
+            if (key.startsWith("camera.") && key.endsWith(".name")) {
+                usedIds.add(key.substring("camera.".length(), key.length() - ".name".length()));
             }
         }
 
@@ -102,10 +112,156 @@ public final class ConfigLoader {
         StringWriter block = new StringWriter();
         added.store(block, "Added from Tapo RTSP Viewer");
 
-        // Replace only after a complete write, keeping existing comments and settings intact.
+        writeAtomically(path, original, original + "\n\n" + block);
+        return camera;
+    }
+
+    public static void removeCamera(Path configPath, CameraConfig selected) throws IOException {
+        Path path = configPath.toAbsolutePath().normalize();
+        String original = readText(path);
+        Properties props = new Properties();
+        props.load(new StringReader(original));
+        List<CameraConfig> cameras = loadCameras(props, loadCameraNames(cameraNamesPath(path)));
+        int position = -1;
+        for (int i = 0; i < cameras.size(); i++) {
+            CameraConfig camera = cameras.get(i);
+            if (camera.id().equals(selected.id()) && camera.liveUrl().equals(selected.liveUrl())) {
+                position = i;
+                break;
+            }
+        }
+        if (position < 0) {
+            // Imported duplicate URLs receive generated ID suffixes. Removing a sibling
+            // can change a suffix; a unique exact URL still identifies the same camera.
+            int uniqueMatch = -1;
+            for (int i = 0; i < cameras.size(); i++) {
+                if (cameras.get(i).liveUrl().equals(selected.liveUrl())) {
+                    uniqueMatch = uniqueMatch == -1 ? i : -2;
+                    if (uniqueMatch == -2) {
+                        break;
+                    }
+                }
+            }
+            position = uniqueMatch;
+        }
+        if (position < 0) {
+            throw new IllegalArgumentException("The camera list has changed. Reopen the app and try again.");
+        }
+
+        // Follow the same source order as loadCameras, removing only the selected occurrence.
+        List<String> inlineUrls = new ArrayList<>();
+        addRtspUrlsFromText(value(props, "rtsp.urls", ""), inlineUrls);
+        if (position < inlineUrls.size()) {
+            inlineUrls.remove(position);
+            Properties replacement = new Properties();
+            replacement.setProperty("rtsp.urls", String.join(" ", inlineUrls));
+            writeAtomically(path, original, replaceProperties(original,
+                Collections.singleton("rtsp.urls"), replacement));
+            return;
+        }
+        position -= inlineUrls.size();
+        Set<Integer> urlIndexes = new TreeSet<>();
+        for (String key : props.stringPropertyNames()) {
+            Matcher matcher = RTSP_URL_KEY.matcher(key);
+            if (matcher.matches()) {
+                urlIndexes.add(Integer.parseInt(matcher.group(1)));
+            }
+        }
+        for (Integer index : urlIndexes) {
+            String key = "rtsp.url." + index;
+            if (!value(props, key, "").trim().isEmpty()) {
+                if (position-- == 0) {
+                    writeAtomically(path, original, replaceProperties(original,
+                        Collections.singleton(key), new Properties()));
+                    return;
+                }
+            }
+        }
+        String urlsFile = value(props, "rtsp.urls.file", "").trim();
+        if (!urlsFile.isEmpty()) {
+            Path urlsPath = resolvePath(urlsFile);
+            String urlsOriginal = readText(urlsPath);
+            List<String> lines = new ArrayList<>(Arrays.asList(urlsOriginal.split("(?<=\n)", -1)));
+            for (int i = 0; i < lines.size(); i++) {
+                String url = lines.get(i).trim();
+                if (!url.isEmpty() && !url.startsWith("#")) {
+                    if (position-- == 0) {
+                        if (!url.equals(selected.liveUrl())) {
+                            throw new IOException("The camera list changed while deleting. Please try again.");
+                        }
+                        lines.remove(i);
+                        writeAtomically(urlsPath, urlsOriginal, String.join("", lines));
+                        return;
+                    }
+                }
+            }
+        }
+        Set<Integer> cameraIndexes = new TreeSet<>();
+        for (String key : props.stringPropertyNames()) {
+            Matcher matcher = CAMERA_KEY.matcher(key);
+            if (matcher.matches()) {
+                cameraIndexes.add(Integer.parseInt(matcher.group(1)));
+            }
+        }
+        for (Integer index : cameraIndexes) {
+            String prefix = "camera." + index + ".";
+            if (booleanValue(props, prefix + "enabled", true) && position-- == 0) {
+                Set<String> keys = new HashSet<>();
+                for (String key : props.stringPropertyNames()) {
+                    if (key.startsWith(prefix)) {
+                        keys.add(key);
+                    }
+                }
+                writeAtomically(path, original, replaceProperties(original, keys, new Properties()));
+                return;
+            }
+        }
+        throw new IOException("The camera list changed while deleting. Please try again.");
+    }
+
+    private static String readText(Path path) throws IOException {
+        return new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
+    }
+
+    private static String replaceProperties(String original, Set<String> keys, Properties replacement)
+            throws IOException {
+        StringBuilder result = new StringBuilder();
+        StringBuilder block = new StringBuilder();
+        for (String line : original.split("(?<=\n)", -1)) {
+            block.append(line);
+            String trimmed = block.toString().trim();
+            boolean comment = trimmed.startsWith("#") || trimmed.startsWith("!");
+            String content = line.replaceFirst("[\\r\\n]+$", "");
+            int slashes = 0;
+            for (int i = content.length() - 1; i >= 0 && content.charAt(i) == '\\'; i--) {
+                slashes++;
+            }
+            if (!comment && (slashes % 2) != 0 && line.endsWith("\n")) {
+                continue;
+            }
+            Properties entry = new Properties();
+            entry.load(new StringReader(block.toString()));
+            if (Collections.disjoint(entry.stringPropertyNames(), keys)) {
+                result.append(block);
+            }
+            block.setLength(0);
+        }
+        if (!replacement.isEmpty()) {
+            StringWriter added = new StringWriter();
+            replacement.store(added, "Updated camera list");
+            result.append('\n').append(added);
+        }
+        return result.toString();
+    }
+
+    private static void writeAtomically(Path path, String original, String updated) throws IOException {
+        // Never truncate the active config if a write fails or an external edit is detected.
         Path temporary = Files.createTempFile(path.getParent(), "cameras-", ".tmp");
         try {
-            Files.write(temporary, (original + "\n\n" + block).getBytes(StandardCharsets.UTF_8));
+            Files.write(temporary, updated.getBytes(StandardCharsets.UTF_8));
+            if (!readText(path).equals(original)) {
+                throw new IOException("The camera configuration changed. Please try again.");
+            }
             try {
                 Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             } catch (AtomicMoveNotSupportedException e) {
@@ -114,7 +270,6 @@ public final class ConfigLoader {
         } finally {
             Files.deleteIfExists(temporary);
         }
-        return camera;
     }
 
     private static boolean sameEndpoint(URI endpoint, String existingUrl) {

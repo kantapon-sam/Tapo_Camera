@@ -21,6 +21,8 @@ public final class LiveCameraPanel extends JPanel {
     private final JLabel titleLabel;
     private final JLabel statusLabel;
     private final JButton muteButton;
+    private final JButton deleteButton;
+    private boolean released;
     private boolean liveRequested;
     private boolean muted;
 
@@ -28,7 +30,8 @@ public final class LiveCameraPanel extends JPanel {
         CameraConfig camera,
         String[] vlcOptions,
         Consumer<LiveCameraPanel> largeViewOpener,
-        Consumer<LiveCameraPanel> renameHandler
+        Consumer<LiveCameraPanel> renameHandler,
+        Consumer<LiveCameraPanel> deleteHandler
     ) {
         super(new BorderLayout(0, 0));
         this.camera = camera;
@@ -39,6 +42,7 @@ public final class LiveCameraPanel extends JPanel {
         this.titleLabel = UiTheme.cameraTitle(camera.displayName());
         this.statusLabel = new JLabel("Stopped");
         this.muteButton = new JButton("Mute");
+        this.deleteButton = new JButton("Delete");
 
         UiTheme.styleSurface(this);
         setPreferredSize(new Dimension(520, 360));
@@ -49,22 +53,29 @@ public final class LiveCameraPanel extends JPanel {
         UiTheme.styleStatusLabel(statusLabel, "Stopped");
         header.add(statusLabel, BorderLayout.EAST);
 
-        JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         UiTheme.styleControlStrip(controls);
         JButton playButton = new JButton("Live");
         JButton stopButton = new JButton("Stop");
         JButton largeButton = new JButton("Large");
         JButton renameButton = new JButton("Rename");
+        JButton accountButton = new JButton("User / Pass");
+        accountButton.setToolTipText("View this camera's username and password");
+        deleteButton.setToolTipText("Remove this camera and keep recorded clips");
         UiTheme.styleButton(playButton, UiTheme.ButtonKind.SUCCESS);
         UiTheme.styleButton(stopButton, UiTheme.ButtonKind.DANGER);
         UiTheme.styleButton(muteButton, UiTheme.ButtonKind.SECONDARY);
         UiTheme.styleButton(largeButton, UiTheme.ButtonKind.PRIMARY);
         UiTheme.styleButton(renameButton, UiTheme.ButtonKind.SECONDARY);
+        UiTheme.styleButton(accountButton, UiTheme.ButtonKind.SECONDARY);
+        UiTheme.styleButton(deleteButton, UiTheme.ButtonKind.DANGER);
         controls.add(playButton);
         controls.add(stopButton);
         controls.add(muteButton);
         controls.add(largeButton);
         controls.add(renameButton);
+        controls.add(accountButton);
+        controls.add(deleteButton);
 
         playerComponent.setBackground(UiTheme.VIDEO_BACKGROUND);
         add(header, BorderLayout.NORTH);
@@ -76,6 +87,8 @@ public final class LiveCameraPanel extends JPanel {
         muteButton.addActionListener(event -> setMuted(!muted));
         largeButton.addActionListener(event -> openLargeView());
         renameButton.addActionListener(event -> rename());
+        accountButton.addActionListener(event -> CameraAccountDialog.show(this, camera));
+        deleteButton.addActionListener(event -> deleteHandler.accept(this));
 
         playerComponent.mediaPlayer().events().addMediaPlayerEventListener(new MediaPlayerEventAdapter() {
             @Override
@@ -99,6 +112,9 @@ public final class LiveCameraPanel extends JPanel {
     }
 
     public void play() {
+        if (released) {
+            return;
+        }
         liveRequested = true;
         setStatus("Connecting...");
         playerComponent.mediaPlayer().media().play(camera.liveUrl(), vlcOptions);
@@ -133,8 +149,18 @@ public final class LiveCameraPanel extends JPanel {
     }
 
     public void release() {
+        if (released) {
+            return;
+        }
         stop();
+        released = true;
         playerComponent.release();
+    }
+
+    public void setCameraRemovalEnabled(boolean enabled) {
+        deleteButton.setEnabled(enabled);
+        deleteButton.setToolTipText(enabled ? "Remove this camera and keep recorded clips"
+            : "Stop recording before deleting a camera");
     }
 
     private void openLargeView() {

@@ -40,15 +40,34 @@ final class AddCameraDialog {
         }
         JTextField username = new JTextField(24);
         JPasswordField password = new JPasswordField(24);
+        username.setName("cameraUsername");
+        password.setName("cameraPassword");
+        char passwordEcho = password.getEchoChar();
+        JCheckBox showPassword = new JCheckBox("Show password");
+        showPassword.addActionListener(event ->
+            password.setEchoChar(showPassword.isSelected() ? '\0' : passwordEcho));
         JLabel error = new JLabel(" ");
         error.setForeground(UiTheme.DANGER);
         reuseAccount.setEnabled(!config.cameras().isEmpty());
         Runnable updateAccountFields = () -> {
             account.setEnabled(reuseAccount.isSelected());
-            username.setEnabled(!reuseAccount.isSelected());
-            password.setEnabled(!reuseAccount.isSelected());
+            username.setEditable(!reuseAccount.isSelected());
+            password.setEditable(!reuseAccount.isSelected());
+            if (reuseAccount.isSelected() && account.getSelectedItem() != null) {
+                try {
+                    CameraCredentials credentials = CameraCredentials.from((CameraConfig) account.getSelectedItem());
+                    username.setText(credentials.username());
+                    password.setText(credentials.password());
+                    error.setText(" ");
+                } catch (IllegalArgumentException e) {
+                    username.setText("");
+                    password.setText("");
+                    error.setText("The selected camera account could not be read.");
+                }
+            }
         };
         reuseAccount.addActionListener(event -> updateAccountFields.run());
+        account.addActionListener(event -> updateAccountFields.run());
         updateAccountFields.run();
 
         addRow(form, 0, "IP / Host", host);
@@ -59,8 +78,9 @@ final class AddCameraDialog {
         addRow(form, 5, "Copy account from", account);
         addRow(form, 6, "Username", username);
         addRow(form, 7, "Password", password);
+        addRow(form, 8, "", showPassword);
         GridBagConstraints footer = new GridBagConstraints();
-        footer.gridy = 8;
+        footer.gridy = 9;
         footer.gridwidth = 2;
         footer.anchor = GridBagConstraints.WEST;
         footer.insets = new Insets(6, 4, 4, 4);
