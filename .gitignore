@@ -1,0 +1,12 @@
+target/
+dist/
+recordings/
+.tools/
+.codex-tools/
+*.log
+
+# Local camera accounts, stream URLs, and saved names.
+/config/cameras.properties
+/config/rtsp-urls.txt
+/config/camera-names.properties
+/config/cameras-*.tmp

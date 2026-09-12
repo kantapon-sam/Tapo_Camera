@@ -1,0 +1,4 @@
+# Copy this file to rtsp-urls.txt and add one RTSP URL per line.
+# Replace the placeholders, then remove the leading # to enable a URL.
+# Percent-encode special characters in the username and password.
+# rtsp://YOUR_CAMERA_ACCOUNT_USER:YOUR_CAMERA_ACCOUNT_PASSWORD@192.168.1.10:554/stream1
